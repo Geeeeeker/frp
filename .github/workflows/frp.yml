@@ -1,4 +1,4 @@
-name: Build iOS frp (with optional Web UI)
+name: Build iOS frp (signed with ldid)
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ on:
 
 jobs:
   build:
-    name: Build and Package
+    name: Build and Package (signed)
     runs-on: macos-latest
     outputs:
       deb_name: ${{ steps.set_outputs.outputs.deb_name }}
@@ -102,6 +102,16 @@ jobs:
           cd ../..
           cp cmd/frps/frps build/usr/local/bin/
 
+      # ----- 安装 ldid 并进行签名 -----
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Sign binaries with ldid
+        run: |
+          ldid -S build/usr/local/bin/frpc
+          ldid -S build/usr/local/bin/frps
+          echo "✅ Signed frpc and frps with ldid"
+
       - name: Set Outputs
         id: set_outputs
         run: |
@@ -119,11 +129,12 @@ jobs:
           Version: ${{ inputs.version || '0.0.0' }}
           Architecture: iphoneos-arm${{ inputs.arch == 'arm64' && '64' || '' }}
           Maintainer: GitHub Actions <actions@github.com>
-          Description: A fast reverse proxy to help you expose a local server behind a NAT or firewall to the internet.
+          Description: A fast reverse proxy (signed with ldid)
           Section: Networking
           Priority: optional
           Homepage: https://github.com/fatedier/frp
           EOF
+          # 可选的 postinst 脚本，再次确保签名（某些越狱环境可能需要）
           cat > build/DEBIAN/postinst <<EOF
           #!/bin/bash
           if command -v ldid &> /dev/null; then
@@ -138,7 +149,7 @@ jobs:
       - name: Upload Artifacts (二进制文件)
         uses: actions/upload-artifact@v4
         with:
-          name: frp-binaries-${{ inputs.arch }}
+          name: frp-binaries-${{ inputs.arch }}-signed
           path: |
             build/usr/local/bin/frpc
             build/usr/local/bin/frps
@@ -175,11 +186,18 @@ jobs:
             ### 包含组件
             - frpc (客户端)
             - frps (服务端)
+            - **已使用 ldid 签名**，解决 Killed:9 问题
             
             ### 编译信息
             - 架构: ${{ inputs.arch }}
             - Web 界面: ${{ inputs.include_web && '开启' || '关闭' }}
             - 最低 iOS 版本: 10.0
+            
+            ### 安装说明
+            1. 下载 `.deb` 文件并通过 Sileo/Cydia 安装。
+            2. 安装后二进制位于 `/usr/local/bin/frpc` 和 `/usr/local/bin/frps`。
+            3. 如果运行仍报 Killed:9，请在终端手动执行 `ldid -S /usr/local/bin/frpc`。
+            4. 配置文件示例：https://gofrp.org/ 或参考仓库中的示例。
           files: ${{ needs.build.outputs.deb_name }}
           draft: false
           prerelease: false
