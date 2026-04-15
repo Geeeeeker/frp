@@ -1,16 +1,21 @@
-name: Build iOS frp (with Web UI)
+name: Build iOS frp (with optional Web UI)
 
 on:
   workflow_dispatch:
     inputs:
       arch:
-        description: '目标 CPU 架构'
+        description: '目标 CPU 架构 (arm64 for iPhone 6s)'
         required: true
         default: 'arm64'
         type: choice
         options:
           - arm64
           - arm
+      include_web:
+        description: '是否包含 Web 管理界面'
+        required: true
+        default: true
+        type: boolean
 
 jobs:
   build-ios:
@@ -25,47 +30,75 @@ jobs:
           go-version: '1.21'
           cache: true
 
+      # 仅在需要 Web UI 时安装 Node.js 并构建前端
       - name: Setup Node.js
+        if: inputs.include_web == true
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # 构建 frpc 的前端
       - name: Build frpc web UI
+        if: inputs.include_web == true
         run: |
           cd web/frpc
           npm ci
           npm run build
           ls -la dist
 
-      # 构建 frps 的前端
       - name: Build frps web UI
+        if: inputs.include_web == true
         run: |
           cd web/frps
           npm ci
           npm run build
           ls -la dist
 
-      # 编译 frpc (iOS)
+      # 配置 iOS 编译环境，这是解决 CGO 链接问题的关键
+      - name: Setup iOS SDK paths
+        run: |
+          # 设置 iOS SDK 路径，actions runner 自带 Xcode
+          echo "SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
+          echo "CC=$(xcrun --sdk iphoneos -f clang)" >> $GITHUB_ENV
+
+      # 根据 include_web 输入，决定是否添加 -tags release 参数
       - name: Build frpc for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frpc
-          GOOS=ios GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frpc_ios_${{ inputs.arch }}
+          BUILD_TAGS=""
+          if [[ "${{ inputs.include_web }}" == "false" ]]; then
+            BUILD_TAGS="-tags release"
+          fi
+          CGO_ENABLED=1 \
+          GOOS=ios \
+          GOARCH=${{ inputs.arch }} \
+          CC=${{ env.CC }} \
+          CGO_CFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }} -miphoneos-version-min=10.0" \
+          CGO_LDFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }}" \
+          go build $BUILD_TAGS -o frpc_ios_${{ inputs.arch }}
           cd ../..
           mv cmd/frpc/frpc_ios_${{ inputs.arch }} .
 
-      # 编译 frps (iOS)
       - name: Build frps for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frps
-          GOOS=ios GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frps_ios_${{ inputs.arch }}
+          BUILD_TAGS=""
+          if [[ "${{ inputs.include_web }}" == "false" ]]; then
+            BUILD_TAGS="-tags release"
+          fi
+          CGO_ENABLED=1 \
+          GOOS=ios \
+          GOARCH=${{ inputs.arch }} \
+          CC=${{ env.CC }} \
+          CGO_CFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }} -miphoneos-version-min=10.0" \
+          CGO_LDFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }}" \
+          go build $BUILD_TAGS -o frps_ios_${{ inputs.arch }}
           cd ../..
           mv cmd/frps/frps_ios_${{ inputs.arch }} .
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: frp-ios-${{ inputs.arch }}-with-web
+          name: frp-ios-${{ inputs.arch }}${{ inputs.include_web == false && '-noweb' || '' }}
           path: |
             frpc_ios_${{ inputs.arch }}
             frps_ios_${{ inputs.arch }}
