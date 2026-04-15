@@ -1,10 +1,10 @@
-name: Build iOS frp (static, signed with ldid)
+name: Build iOS frp (cgo, signed with ldid)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release 版本号 (例如: v0.54.0) - 仅在创建 Release 时需要'
+        description: 'Release 版本号 (例如: v0.54.0)'
         required: false
         type: string
       arch:
@@ -28,7 +28,7 @@ on:
 
 jobs:
   build:
-    name: Build and Package (static, signed)
+    name: Build and Package (cgo, signed)
     runs-on: macos-latest
     outputs:
       deb_name: ${{ steps.set_outputs.outputs.deb_name }}
@@ -36,10 +36,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Go
+      - name: Setup Go (fixed version 1.21)
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.21.13'  # 固定具体补丁版本
           cache: true
 
       # 仅在需要 Web UI 时构建前端
@@ -63,7 +63,13 @@ jobs:
           npm ci
           npm run build
 
-      # 静态编译 frpc
+      # 配置 iOS SDK
+      - name: Configure iOS SDK
+        run: |
+          echo "SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
+          echo "CC=$(xcrun --sdk iphoneos -f clang)" >> $GITHUB_ENV
+
+      # 编译 frpc (iOS, cgo)
       - name: Build frpc for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frpc
@@ -71,12 +77,18 @@ jobs:
           if [[ "${{ inputs.include_web }}" == "false" ]]; then
             BUILD_TAGS="-tags release"
           fi
-          CGO_ENABLED=0 GOOS=ios GOARCH=${{ inputs.arch }} go build $BUILD_TAGS -o frpc
+          CGO_ENABLED=1 \
+          GOOS=ios \
+          GOARCH=${{ inputs.arch }} \
+          CC=${{ env.CC }} \
+          CGO_CFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }} -miphoneos-version-min=10.0" \
+          CGO_LDFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }}" \
+          go build -ldflags="-s -w" $BUILD_TAGS -o frpc
           cd ../..
           mkdir -p build/usr/local/bin
           cp cmd/frpc/frpc build/usr/local/bin/
 
-      # 静态编译 frps
+      # 编译 frps (iOS, cgo)
       - name: Build frps for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frps
@@ -84,7 +96,13 @@ jobs:
           if [[ "${{ inputs.include_web }}" == "false" ]]; then
             BUILD_TAGS="-tags release"
           fi
-          CGO_ENABLED=0 GOOS=ios GOARCH=${{ inputs.arch }} go build $BUILD_TAGS -o frps
+          CGO_ENABLED=1 \
+          GOOS=ios \
+          GOARCH=${{ inputs.arch }} \
+          CC=${{ env.CC }} \
+          CGO_CFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }} -miphoneos-version-min=10.0" \
+          CGO_LDFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }}" \
+          go build -ldflags="-s -w" $BUILD_TAGS -o frps
           cd ../..
           cp cmd/frps/frps build/usr/local/bin/
 
@@ -104,7 +122,6 @@ jobs:
           DEB_NAME="frp-ios_${{ inputs.version || 'latest' }}_${{ inputs.arch }}.deb"
           echo "deb_name=${DEB_NAME}" >> $GITHUB_OUTPUT
 
-      # 安装 dpkg 并打包 .deb
       - name: Install dpkg
         run: brew install dpkg
 
@@ -116,12 +133,11 @@ jobs:
           Version: ${{ inputs.version || '0.0.0' }}
           Architecture: iphoneos-arm${{ inputs.arch == 'arm64' && '64' || '' }}
           Maintainer: GitHub Actions <actions@github.com>
-          Description: A fast reverse proxy (static, signed with ldid)
+          Description: A fast reverse proxy (cgo, signed with ldid)
           Section: Networking
           Priority: optional
           Homepage: https://github.com/fatedier/frp
           EOF
-          # 可选 postinst 脚本，安装后再次尝试签名
           cat > build/DEBIAN/postinst <<'EOF'
           #!/bin/bash
           if command -v ldid &> /dev/null; then
@@ -133,7 +149,6 @@ jobs:
           chmod +x build/DEBIAN/postinst
           dpkg-deb --build build ${{ steps.set_outputs.outputs.deb_name }}
 
-      # 上传二进制文件（已签名）作为 Artifact
       - name: Upload binaries artifact
         uses: actions/upload-artifact@v4
         with:
@@ -143,7 +158,6 @@ jobs:
             build/usr/local/bin/frps
           if-no-files-found: error
 
-      # 上传 .deb 包作为 Artifact
       - name: Upload deb artifact
         uses: actions/upload-artifact@v4
         with:
@@ -176,7 +190,7 @@ jobs:
             - `frpc` (客户端)
             - `frps` (服务端)
             - **已使用 `ldid` 签名**，解决 `Killed: 9` 问题
-            - **静态编译 (`CGO_ENABLED=0`)**，无动态库依赖，避免 `dyld` 错误
+            - **使用 cgo + iOS SDK 编译**，确保兼容 iOS 10+
             
             ### 编译信息
             - 架构: `${{ inputs.arch }}`
