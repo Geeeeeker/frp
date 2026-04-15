@@ -29,7 +29,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # 不设置全局 cache，因为根目录没有 package-lock.json
 
       # 构建 frpc 的前端
       - name: Build frpc web UI
@@ -37,7 +37,7 @@ jobs:
           cd web/frpc
           npm ci
           npm run build
-          ls -la dist  # 确认 dist 目录生成
+          ls -la dist
 
       # 构建 frps 的前端
       - name: Build frps web UI
