@@ -1,11 +1,10 @@
-name: Build iOS frp Client
+name: Build iOS frp (with Web UI)
 
-# 允许手动触发，并定义输入参数
 on:
   workflow_dispatch:
     inputs:
       arch:
-        description: '选择目标 CPU 架构'
+        description: '目标 CPU 架构'
         required: true
         default: 'arm64'
         type: choice
@@ -24,17 +23,39 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
-          # 启用缓存以加速构建
           cache: true
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 构建 frpc 的前端
+      - name: Build frpc web UI
+        run: |
+          cd web/frpc
+          npm ci
+          npm run build
+          ls -la dist  # 确认 dist 目录生成
+
+      # 构建 frps 的前端
+      - name: Build frps web UI
+        run: |
+          cd web/frps
+          npm ci
+          npm run build
+          ls -la dist
+
+      # 编译 frpc (iOS)
       - name: Build frpc for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frpc
           GOOS=darwin GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frpc_ios_${{ inputs.arch }}
           cd ../..
-          # 将编译产物移动到工作流根目录，方便后续上传
           mv cmd/frpc/frpc_ios_${{ inputs.arch }} .
 
+      # 编译 frps (iOS)
       - name: Build frps for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frps
@@ -42,10 +63,10 @@ jobs:
           cd ../..
           mv cmd/frps/frps_ios_${{ inputs.arch }} .
 
-      - name: Upload binaries as artifacts
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: frp-ios-${{ inputs.arch }}
+          name: frp-ios-${{ inputs.arch }}-with-web
           path: |
             frpc_ios_${{ inputs.arch }}
             frps_ios_${{ inputs.arch }}
