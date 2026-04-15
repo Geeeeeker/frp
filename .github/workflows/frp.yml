@@ -1,8 +1,13 @@
-name: Build iOS frp (with optional Web UI)
+# .github/workflows/build-frp-ios.yml
+name: Build iOS frp and Create Release
 
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Release 版本号 (例如: v0.54.0)'
+        required: true
+        type: string
       arch:
         description: '目标 CPU 架构 (arm64 for iPhone 6s)'
         required: true
@@ -14,12 +19,14 @@ on:
       include_web:
         description: '是否包含 Web 管理界面'
         required: true
-        default: true
+        default: false
         type: boolean
 
 jobs:
-  build-ios:
+  build-and-release:
     runs-on: macos-latest
+    permissions:
+      contents: write  # 允许创建 Release 和上传文件
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,7 +37,7 @@ jobs:
           go-version: '1.21'
           cache: true
 
-      # 仅在需要 Web UI 时安装 Node.js 并构建前端
+      # 只在需要 Web UI 时安装 Node.js 并构建前端
       - name: Setup Node.js
         if: inputs.include_web == true
         uses: actions/setup-node@v4
@@ -43,7 +50,6 @@ jobs:
           cd web/frpc
           npm ci
           npm run build
-          ls -la dist
 
       - name: Build frps web UI
         if: inputs.include_web == true
@@ -51,16 +57,14 @@ jobs:
           cd web/frps
           npm ci
           npm run build
-          ls -la dist
 
-      # 配置 iOS 编译环境，这是解决 CGO 链接问题的关键
-      - name: Setup iOS SDK paths
+      # 配置 iOS 交叉编译环境
+      - name: Configure iOS SDK
         run: |
-          # 设置 iOS SDK 路径，actions runner 自带 Xcode
           echo "SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
           echo "CC=$(xcrun --sdk iphoneos -f clang)" >> $GITHUB_ENV
 
-      # 根据 include_web 输入，决定是否添加 -tags release 参数
+      # 编译 frpc
       - name: Build frpc for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frpc
@@ -74,10 +78,12 @@ jobs:
           CC=${{ env.CC }} \
           CGO_CFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }} -miphoneos-version-min=10.0" \
           CGO_LDFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }}" \
-          go build $BUILD_TAGS -o frpc_ios_${{ inputs.arch }}
+          go build $BUILD_TAGS -o frpc
           cd ../..
-          mv cmd/frpc/frpc_ios_${{ inputs.arch }} .
+          mkdir -p build/usr/local/bin
+          cp cmd/frpc/frpc build/usr/local/bin/
 
+      # 编译 frps
       - name: Build frps for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frps
@@ -91,14 +97,72 @@ jobs:
           CC=${{ env.CC }} \
           CGO_CFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }} -miphoneos-version-min=10.0" \
           CGO_LDFLAGS="-isysroot ${{ env.SDK_PATH }} -arch ${{ inputs.arch }}" \
-          go build $BUILD_TAGS -o frps_ios_${{ inputs.arch }}
+          go build $BUILD_TAGS -o frps
           cd ../..
-          mv cmd/frps/frps_ios_${{ inputs.arch }} .
+          cp cmd/frps/frps build/usr/local/bin/
 
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
+      # 打包 .deb 文件
+      - name: Package .deb
+        run: |
+          # 创建 DEBIAN 目录
+          mkdir -p build/DEBIAN
+          
+          # 写入 control 文件
+          cat > build/DEBIAN/control <<EOF
+          Package: frp-ios
+          Version: ${{ inputs.version }}
+          Architecture: iphoneos-arm${{ inputs.arch == 'arm64' && '64' || '' }}
+          Maintainer: GitHub Actions <actions@github.com>
+          Description: A fast reverse proxy to help you expose a local server behind a NAT or firewall to the internet.
+          Section: Networking
+          Priority: optional
+          Homepage: https://github.com/fatedier/frp
+          EOF
+          
+          # 写入 postinst 脚本（可选，用于安装后自动签名）
+          cat > build/DEBIAN/postinst <<EOF
+          #!/bin/bash
+          # 自动为二进制文件进行签名（如果设备上有 ldid）
+          if command -v ldid &> /dev/null; then
+            ldid -S /usr/local/bin/frpc
+            ldid -S /usr/local/bin/frps
+          fi
+          exit 0
+          EOF
+          chmod +x build/DEBIAN/postinst
+          
+          # 打包
+          dpkg-deb --build build frp-ios_${{ inputs.version }}_${{ inputs.arch }}.deb
+
+      # 创建 GitHub Release 并上传 .deb
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v1
         with:
-          name: frp-ios-${{ inputs.arch }}${{ inputs.include_web == false && '-noweb' || '' }}
-          path: |
-            frpc_ios_${{ inputs.arch }}
-            frps_ios_${{ inputs.arch }}
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body: |
+            ## iOS 版 frp ${{ inputs.version }}
+            
+            ### 包含组件
+            - frpc (客户端)
+            - frps (服务端)
+            
+            ### 编译信息
+            - 架构: ${{ inputs.arch }}
+            - Web 界面: ${{ inputs.include_web && '开启' || '关闭' }}
+            - 最低 iOS 版本: 10.0
+            
+            ### 安装说明
+            1. 下载 `.deb` 文件并通过 Sileo/Cydia 安装。
+            2. 安装后，二进制文件位于 `/usr/local/bin/frpc` 和 `/usr/local/bin/frps`。
+            3. 首次运行前，建议使用 `ldid -S` 对二进制进行签名。
+            4. 配置文件示例可参考 https://gofrp.org/。
+            
+            ### ⚠️ 重要提示
+            启动服务端或客户端前，请根据你的需求创建配置文件 `frps.toml` 或 `frpc.toml`。
+          files: |
+            frp-ios_${{ inputs.version }}_${{ inputs.arch }}.deb
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
