@@ -1,0 +1,51 @@
+name: Build iOS frp Client
+
+# 允许手动触发，并定义输入参数
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: '选择目标 CPU 架构'
+        required: true
+        default: 'arm64'
+        type: choice
+        options:
+          - arm64
+          - arm
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          # 启用缓存以加速构建
+          cache: true
+
+      - name: Build frpc for iOS (${{ inputs.arch }})
+        run: |
+          cd cmd/frpc
+          GOOS=darwin GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frpc_ios_${{ inputs.arch }}
+          cd ../..
+          # 将编译产物移动到工作流根目录，方便后续上传
+          mv cmd/frpc/frpc_ios_${{ inputs.arch }} .
+
+      - name: Build frps for iOS (${{ inputs.arch }})
+        run: |
+          cd cmd/frps
+          GOOS=darwin GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frps_ios_${{ inputs.arch }}
+          cd ../..
+          mv cmd/frps/frps_ios_${{ inputs.arch }} .
+
+      - name: Upload binaries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frp-ios-${{ inputs.arch }}
+          path: |
+            frpc_ios_${{ inputs.arch }}
+            frps_ios_${{ inputs.arch }}
