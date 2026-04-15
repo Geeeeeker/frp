@@ -29,7 +29,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # 不设置全局 cache，因为根目录没有 package-lock.json
 
       # 构建 frpc 的前端
       - name: Build frpc web UI
@@ -51,7 +50,7 @@ jobs:
       - name: Build frpc for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frpc
-          GOOS=darwin GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frpc_ios_${{ inputs.arch }}
+          GOOS=ios GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frpc_ios_${{ inputs.arch }}
           cd ../..
           mv cmd/frpc/frpc_ios_${{ inputs.arch }} .
 
@@ -59,7 +58,7 @@ jobs:
       - name: Build frps for iOS (${{ inputs.arch }})
         run: |
           cd cmd/frps
-          GOOS=darwin GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frps_ios_${{ inputs.arch }}
+          GOOS=ios GOARCH=${{ inputs.arch }} CGO_ENABLED=0 go build -o frps_ios_${{ inputs.arch }}
           cd ../..
           mv cmd/frps/frps_ios_${{ inputs.arch }} .
 
